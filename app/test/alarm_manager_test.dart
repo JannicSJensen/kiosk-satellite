@@ -100,6 +100,166 @@ void main() {
   Iterable<String> named(String name) =>
       calls.where((c) => c.$1 == name).map((c) => jsonEncode(c.$2));
 
+  testWidgets('dashboard presentation expires without stopping native audio', (
+    tester,
+  ) async {
+    now = DateTime(2026, 10, 2, 7);
+    await tester.runAsync(
+      () => build(
+        [daily('07:00')],
+        extra: {'ks.alarms.dashboard_url': 'http://clock.local/'},
+      ),
+    );
+    final page = Uri.parse('http://clock.local/#clock');
+    final initial = await alarms.dashboardAlarmUi(page, {'action': 'status'});
+    expect(initial['ok'], isTrue);
+    expect(alarms.dashboardPresented.value, isFalse);
+    final context = initial['context'];
+    expect(
+      (await alarms.dashboardAlarmUi(page, {
+        'action': 'present',
+        'context': context,
+      }))['ok'],
+      isTrue,
+    );
+    expect(alarms.dashboardPresented.value, isTrue);
+    await tester.pump(const Duration(seconds: 3));
+    await alarms.dashboardAlarmUi(page, {
+      'action': 'present',
+      'context': context,
+    });
+    await tester.pump(const Duration(seconds: 3));
+    expect(alarms.dashboardPresented.value, isTrue);
+    await tester.pump(const Duration(seconds: 1));
+    expect(alarms.dashboardPresented.value, isFalse);
+    expect(alarms.status.value.phase, AlarmPhase.ringing);
+    expect(alarms.status.value.ownView, isTrue);
+  });
+
+  test(
+    'dashboard access is opt-in and URL-bound; stale controls are rejected',
+    () async {
+      now = DateTime(2026, 10, 2, 7);
+      await build([daily('07:00', id: 'a'), daily('07:00', id: 'b')]);
+      final page = Uri.parse('http://clock.local/');
+      expect(
+        (await alarms.dashboardAlarmUi(page, {'action': 'status'}))['ok'],
+        isFalse,
+      );
+      await settings.set(defs.alarmsDashboardUrl, 'http://clock.local/');
+      for (final url in [
+        'http://other.local/',
+        'http://clock.local/other',
+        'https://clock.local/',
+      ]) {
+        expect(
+          (await alarms.dashboardAlarmUi(Uri.parse(url), {
+            'action': 'status',
+          }))['ok'],
+          isFalse,
+        );
+      }
+      final s = await alarms.dashboardAlarmUi(page, {'action': 'status'});
+      final context = Map<String, Object?>.from(s['context'] as Map);
+      expect((context['ids'] as List).toSet(), {'a', 'b'});
+      for (final action in ['present', 'stop', 'snooze']) {
+        expect(
+          (await alarms.dashboardAlarmUi(page, {
+            'action': action,
+            'context': {
+              ...context,
+              'ids': ['a'],
+            },
+          }))['ok'],
+          isFalse,
+        );
+      }
+      expect(alarms.status.value.phase, AlarmPhase.ringing);
+      expect(
+        (await alarms.dashboardAlarmUi(page, {
+          'action': 'snooze',
+          'context': context,
+        }))['ok'],
+        isTrue,
+      );
+      expect(alarms.status.value.phase, AlarmPhase.snoozed);
+      expect(
+        (await alarms.dashboardAlarmUi(page, {
+          'action': 'stop',
+          'context': context,
+        }))['ok'],
+        isFalse,
+      );
+      final snoozed = await alarms.dashboardAlarmUi(page, {'action': 'status'});
+      expect(
+        (await alarms.dashboardAlarmUi(page, {
+          'action': 'stop',
+          'context': snoozed['context'],
+        }))['ok'],
+        isTrue,
+      );
+      expect(alarms.status.value.phase, AlarmPhase.idle);
+    },
+  );
+
+  test(
+    'dashboard setting accepts only explicit credential-free web URLs',
+    () async {
+      now = DateTime(2026, 10, 2, 6);
+      await build([]);
+      for (final value in [
+        '',
+        'http://127.0.0.1:2325/',
+        'https://clock.local/clock/',
+      ]) {
+        expect(defs.validateAlarmDashboardUrl(value), isNull);
+      }
+      for (final value in [
+        'clock.local',
+        'file:///clock',
+        'http://user:pass@clock.local/',
+        'https://clock.local/?token=x',
+        'http://clock.local/#clock',
+      ]) {
+        expect(defs.validateAlarmDashboardUrl(value), isNotNull);
+      }
+    },
+  );
+
+  test(
+    'a changed native alarm group immediately restores the native screen',
+    () async {
+      now = DateTime(2026, 10, 2, 7);
+      await build(
+        [daily('07:00', id: 'a'), daily('07:00', id: 'b')],
+        extra: {'ks.alarms.dashboard_url': 'http://clock.local/'},
+      );
+      final page = Uri.parse('http://clock.local/');
+      final snapshot = await alarms.dashboardAlarmUi(page, {
+        'action': 'status',
+      });
+      await alarms.dashboardAlarmUi(page, {
+        'action': 'present',
+        'context': snapshot['context'],
+      });
+      expect(alarms.dashboardPresented.value, isTrue);
+      alarms.status.value = AlarmStatus(
+        phase: AlarmPhase.ringing,
+        ids: const ['a'],
+        at: alarms.status.value.at,
+      );
+      expect(alarms.dashboardPresented.value, isFalse);
+      expect(
+        (await alarms.dashboardAlarmUi(page, {
+          'action': 'stop',
+          'context': snapshot['context'],
+        }))['ok'],
+        isFalse,
+      );
+      expect(alarms.status.value.phase, AlarmPhase.ringing);
+    },
+  );
+
   test('openAlarms with alarm next asks the list for the next alarm', () async {
     now = DateTime(2026, 10, 2, 6, 0);
     await build([daily('09:00', id: 'late'), daily('07:00', id: 'early')]);

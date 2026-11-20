@@ -34,6 +34,16 @@ String buildKioskSatelliteScript({
     version: '$version',
     os: '$os',
 
+    alarmUi: function (action, context) {
+      try {
+        return window.flutter_inappwebview.callHandler('ksAlarmUi', {
+          action: action, context: context
+        }).catch(function () { return {ok: false, error: 'bridge_unavailable'}; });
+      } catch (e) {
+        return Promise.resolve({ok: false, error: 'bridge_unavailable'});
+      }
+    },
+
     getVoiceChimeDurations: function () { return call('getVoiceChimeDurations'); },
     setVoiceTimerAlert: function (snapshot) { return call('setVoiceTimerAlert', snapshot); },
     setVoiceTimers: function (snapshot) { return call('setVoiceTimers', snapshot); },

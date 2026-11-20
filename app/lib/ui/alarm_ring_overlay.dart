@@ -22,10 +22,16 @@ class AlarmRingOverlay extends StatelessWidget {
   final AppContainer container;
 
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder<AlarmStatus>(
-    valueListenable: container.alarms.status,
-    builder: (context, status, _) {
-      if (!status.ownView) return const SizedBox.shrink();
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: Listenable.merge([
+      container.alarms.status,
+      container.alarms.dashboardPresented,
+    ]),
+    builder: (context, _) {
+      final status = container.alarms.status.value;
+      if (!status.ownView || container.alarms.dashboardPresented.value) {
+        return const SizedBox.shrink();
+      }
       return Positioned.fill(
         child: ClockSetting(
           container: container,

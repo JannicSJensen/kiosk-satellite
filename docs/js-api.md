@@ -24,6 +24,19 @@ Because the object exists synchronously right from document start, a simple sync
 
 Every method returns a `Promise`. To match the defensive coding style of Voice Satellite's wrapper, methods will resolve to `null` (for queries) or `false` (for commands) upon failure. They will never reject due to a platform error.
 
+### Native alarm presentation
+
+`alarmUi(action, context)` is an opt-in, main-document-only bridge for a
+dashboard that presents native alarms. Unlike the legacy methods, it returns
+structured `{ok, error?}` results. `status` returns presentation protocol 1,
+the runtime device identity, the exact occurrence/group context, alarm
+summaries and native Snooze length. `present` renews a four-second presentation
+lease after usable controls are rendered; `release` restores the native view.
+`stop` and `snooze` require the exact current context. Untrusted pages, iframes
+and stale or partial alarm groups cannot use these controls.
+See [Dashboard ringing UI](alarms.md#dashboard-ringing-ui) for configuration,
+the complete contract and emergency fallback requirements.
+
 ### Device / Screen
 
 | Method | Returns | Description |

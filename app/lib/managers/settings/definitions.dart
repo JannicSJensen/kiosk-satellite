@@ -12718,6 +12718,35 @@ const alarmsMenu = SettingDef<bool>(
   linksTo: 'ui.drawer_items',
 );
 
+const alarmsDashboardUrl = SettingDef<String>(
+  key: 'alarms.dashboard_url',
+  type: SettingType.string,
+  defaultValue: '',
+  title: 'Dashboard alarm UI URL',
+  description:
+      'Optional trusted dashboard URL, exactly as loaded on this device. '
+      'A compatible dashboard can show the ringing controls; the native '
+      'screen returns if it stops responding. Empty keeps the native UI.',
+  category: 'Alarms',
+  perDevice: true,
+  validator: validateAlarmDashboardUrl,
+);
+
+String? validateAlarmDashboardUrl(Object? value) {
+  if (value is! String) return 'Enter an HTTP or HTTPS dashboard URL.';
+  if (value.isEmpty) return null;
+  final uri = Uri.tryParse(value);
+  if (uri == null ||
+      !const ['http', 'https'].contains(uri.scheme) ||
+      uri.host.isEmpty ||
+      uri.userInfo.isNotEmpty ||
+      uri.hasQuery ||
+      uri.hasFragment) {
+    return 'Enter an HTTP or HTTPS URL without credentials, query or fragment.';
+  }
+  return null;
+}
+
 /// Alarm times in 24 hours or with AM/PM, on the alarm screens, the
 /// ringing screen, the next alarm widget and the spoken phrase. Seeded once
 /// from Android's clock (see SettingsManager.init).
@@ -15447,6 +15476,7 @@ const List<SettingDef<Object>> allSettings = [
   alarmsList,
   alarmsRuntime,
   alarmsMenu,
+  alarmsDashboardUrl,
   alarmsClock24h,
   alarmsVolume,
   alarmsEaseIn,

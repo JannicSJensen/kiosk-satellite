@@ -30,6 +30,9 @@ class JsApiManager extends Manager {
 
   InAppWebViewController? _controller;
   final _pageInteractions = <String>{};
+  Future<Map<String, Object?>> Function(Uri?, Map<String, Object?>)?
+  dashboardAlarmUi;
+  void Function()? releaseDashboardAlarmUi;
 
   /// The managed Home Assistant connection custom pages open through
   /// `kioskSatellite.ha` (see page_ha_socket.dart). Set by the composition
@@ -166,6 +169,18 @@ class JsApiManager extends Manager {
     // answers are not the ksApi call shapes, and only the top document of
     // the page may use it.
     controller.addJavaScriptHandler(
+      handlerName: 'ksAlarmUi',
+      callback: (JavaScriptHandlerFunctionData data) =>
+          identical(_controller?.platform, controller.platform)
+          ? handleAlarmUi(
+              data.args,
+              mainFrame: data.isMainFrame,
+              page: Uri.tryParse(data.requestUrl.toString()),
+              origin: data.origin.toString(),
+            )
+          : null,
+    );
+    controller.addJavaScriptHandler(
       handlerName: 'ksHaSocket',
       callback: (JavaScriptHandlerFunctionData data) =>
           identical(_controller?.platform, controller.platform) &&
@@ -173,6 +188,33 @@ class JsApiManager extends Manager {
           ? handleHaSocket(data.args)
           : null,
     );
+  }
+
+  @visibleForTesting
+  Future<Map<String, Object?>> handleAlarmUi(
+    List<dynamic> args, {
+    required bool mainFrame,
+    required Uri? page,
+    required String origin,
+  }) async {
+    final handle = dashboardAlarmUi;
+    final source = Uri.tryParse(origin);
+    if (!mainFrame ||
+        page == null ||
+        !const ['http', 'https'].contains(page.scheme) ||
+        page.host.isEmpty ||
+        source == null ||
+        !const ['http', 'https'].contains(source.scheme) ||
+        source.host.isEmpty ||
+        source.userInfo.isNotEmpty ||
+        source.origin != page.origin ||
+        args.length != 1 ||
+        args.first is! Map ||
+        !(args.first as Map).keys.every((key) => key is String) ||
+        handle == null) {
+      return const {'ok': false, 'error': 'dashboard_not_allowed'};
+    }
+    return handle(page, Map<String, Object?>.from(args.first as Map));
   }
 
   void _runInPage(String js) {
@@ -235,6 +277,7 @@ class JsApiManager extends Manager {
 
   /// A full navigation replaces the document. SPA view switches do not.
   void onPageStarted() {
+    releaseDashboardAlarmUi?.call();
     // The document's Home Assistant sockets go with it. The page is told,
     // in case the new document already opened one before this news
     // arrived: it opens it again.

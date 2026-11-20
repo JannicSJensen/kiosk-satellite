@@ -47,6 +47,80 @@ void main() {
   }
 
   test(
+    'alarm presentation accepts only the main document and clears on navigation',
+    () async {
+      await build();
+      var released = 0;
+      var called = 0;
+      api.dashboardAlarmUi = (page, params) async {
+        called++;
+        return {
+          'ok': true,
+          'page': page.toString(),
+          'action': params['action'],
+        };
+      };
+      api.releaseDashboardAlarmUi = () => released++;
+      final page = Uri.parse('http://clock.local/');
+      for (final mainFrame in [false, true]) {
+        final result = await api.handleAlarmUi(
+          [
+            {'action': 'status'},
+          ],
+          mainFrame: mainFrame,
+          page: page,
+          origin: 'http://clock.local',
+        );
+        expect(result['ok'], mainFrame);
+      }
+      expect(
+        (await api.handleAlarmUi(
+          [
+            {'action': 'status'},
+          ],
+          mainFrame: true,
+          page: page,
+          origin: 'http://other.local',
+        ))['ok'],
+        isFalse,
+      );
+      expect(called, 1);
+      expect(
+        (await api.handleAlarmUi(
+          [
+            {'action': 'status'},
+          ],
+          mainFrame: true,
+          page: page,
+          origin: 'http://clock.local/',
+        ))['ok'],
+        isTrue,
+      );
+      for (final args in [
+        <dynamic>[],
+        <dynamic>['status'],
+        <dynamic>[
+          {1: 'status'},
+        ],
+      ]) {
+        expect(
+          (await api.handleAlarmUi(
+            args,
+            mainFrame: true,
+            page: page,
+            origin: 'http://clock.local',
+          ))['ok'],
+          isFalse,
+        );
+      }
+      expect(called, 2);
+      api.onPageStarted();
+      expect(released, 1);
+      await api.dispose();
+    },
+  );
+
+  test(
     'browser microphone holds survive another track stopping and clear on navigation',
     () async {
       await build();

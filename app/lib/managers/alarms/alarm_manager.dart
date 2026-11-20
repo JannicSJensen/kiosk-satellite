@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show Random;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -176,6 +177,14 @@ class AlarmManager extends Manager {
   final alarms = ValueNotifier<List<Alarm>>(const []);
 
   final status = ValueNotifier<AlarmStatus>(const AlarmStatus());
+  final dashboardPresented = ValueNotifier<bool>(false);
+  final _dashboardDevice = List.generate(
+    16,
+    (_) => Random.secure().nextInt(256).toRadixString(16).padLeft(2, '0'),
+  ).join();
+  Timer? _dashboardLease;
+  String? _presentedContext;
+  bool _dashboardAction = false;
 
   final _subs = <StreamSubscription<Object?>>[];
 
@@ -235,6 +244,7 @@ class AlarmManager extends Manager {
       return null;
     });
     _registerCommands();
+    status.addListener(_syncDashboardPresentation);
     // Setting an alarm is not idle time: the screensaver waits while the
     // list is up.
     visible.addListener(_syncHold);
@@ -251,6 +261,8 @@ class AlarmManager extends Manager {
             unawaited(_check());
           } else if (e.key == defs.kioskAllowAlarms.key && e.value != true) {
             visible.value = false;
+          } else if (e.key == defs.alarmsDashboardUrl.key) {
+            releaseDashboardPresentation();
           }
         }),
       )
@@ -290,6 +302,7 @@ class AlarmManager extends Manager {
     _precise?.cancel();
     _ramp?.cancel();
     _silence?.cancel();
+    _dashboardLease?.cancel();
     for (final sub in _subs) {
       await sub.cancel();
     }
@@ -298,6 +311,7 @@ class AlarmManager extends Manager {
     focus.dispose();
     alarms.dispose();
     status.dispose();
+    dashboardPresented.dispose();
   }
 
   bool _listHeld = false;
@@ -1136,6 +1150,7 @@ class AlarmManager extends Manager {
   /// Everything a ring holds, let go: the tone, the stop word, the
   /// brightness, the screen and the screensaver.
   Future<void> _quiet() async {
+    releaseDashboardPresentation();
     _ringGen++;
     _ramp?.cancel();
     _silence?.cancel();
@@ -1166,6 +1181,7 @@ class AlarmManager extends Manager {
   /// own view: Clock or Weather Mood, chosen, scheduled or held by a plugin
   /// now, with its Let alarms take over switch on.
   String? _takeoverMode() {
+    if (_settings.get(defs.alarmsDashboardUrl).isNotEmpty) return null;
     if (!_settings.get(defs.screensaverEnabled)) return null;
     final entry = currentScreensaverScheduleEntry(_settings, now: _clock());
     final mode =
@@ -1341,13 +1357,133 @@ class AlarmManager extends Manager {
           {...a.toJson(), 'next': upcoming(a, now)?.toUtc().toIso8601String()},
       ],
       'visible': visible.value,
+      'presentation': {
+        'version': 1,
+        'device': _dashboardDevice,
+        'enabled': _settings.get(defs.alarmsDashboardUrl).isNotEmpty,
+      },
     };
+  }
+
+  Map<String, Object?> get _dashboardContext => {
+    'phase': _s.phase.name,
+    'ids': _s.ids,
+    'at': _s.at?.toUtc().toIso8601String(),
+    'snoozedUntil': _s.snoozedUntil?.toUtc().toIso8601String(),
+    'generation': _ringGen,
+  };
+
+  void releaseDashboardPresentation() {
+    _dashboardLease?.cancel();
+    _dashboardLease = null;
+    _presentedContext = null;
+    dashboardPresented.value = false;
+  }
+
+  void _syncDashboardPresentation() {
+    if (_presentedContext != null &&
+        _presentedContext != jsonEncode(_dashboardContext)) {
+      releaseDashboardPresentation();
+    }
+  }
+
+  bool _matchesDashboardContext(Object? value) {
+    if (value is! Map || value.length != 5) return false;
+    final expected = _dashboardContext;
+    return value['phase'] == expected['phase'] &&
+        value['at'] == expected['at'] &&
+        value['snoozedUntil'] == expected['snoozedUntil'] &&
+        value['generation'] == expected['generation'] &&
+        value['ids'] is List &&
+        listEquals(value['ids'] as List, _s.ids);
+  }
+
+  /// Only the trusted main document can lease presentation. This is not
+  /// registered as a remote command: a server cannot attest to a local UI.
+  Future<Map<String, Object?>> dashboardAlarmUi(
+    Uri? page,
+    Map<String, Object?> params,
+  ) async {
+    final configured = _settings.get(defs.alarmsDashboardUrl);
+    final trusted = configured.isEmpty ? null : Uri.tryParse(configured);
+    if (trusted == null ||
+        page == null ||
+        page.origin != trusted.origin ||
+        (page.path.isEmpty ? '/' : page.path) !=
+            (trusted.path.isEmpty ? '/' : trusted.path) ||
+        page.userInfo.isNotEmpty) {
+      return const {'ok': false, 'error': 'dashboard_not_allowed'};
+    }
+    Map<String, Object?> snapshot() => {
+      'ok': true,
+      'version': 1,
+      'device': _dashboardDevice,
+      'context': _dashboardContext,
+      'snoozeMinutes': _snooze.inMinutes,
+      'alarms': [
+        for (final id in _s.ids)
+          for (final alarm in alarms.value.where((alarm) => alarm.id == id))
+            {
+              'id': id,
+              'label': alarm.label,
+              'type': alarm.musicWith(defaultMusic) == null
+                  ? 'Buzzer'
+                  : 'Music',
+              'station': alarm.musicWith(defaultMusic)?.item?.title ?? '',
+              'speaker': alarm.musicWith(defaultMusic)?.speakerName ?? '',
+            },
+      ],
+    };
+    final action = params['action'];
+    if (action == 'status') return snapshot();
+    if (action == 'release') {
+      releaseDashboardPresentation();
+      return snapshot();
+    }
+    if (!_matchesDashboardContext(params['context'])) {
+      return const {'ok': false, 'error': 'alarm_context_changed'};
+    }
+    if (action == 'present' && _s.phase == AlarmPhase.ringing) {
+      if (_s.takeover != null) {
+        return const {'ok': false, 'error': 'screensaver_takeover_active'};
+      }
+      _presentedContext = jsonEncode(_dashboardContext);
+      dashboardPresented.value = true;
+      _dashboardLease?.cancel();
+      _dashboardLease = Timer(const Duration(seconds: 4), () {
+        log.warn(
+          name,
+          'dashboard alarm UI stopped responding; restoring native controls',
+        );
+        releaseDashboardPresentation();
+      });
+      return snapshot();
+    }
+    if ((action != 'stop' && action != 'snooze') ||
+        !const [AlarmPhase.ringing, AlarmPhase.snoozed].contains(_s.phase)) {
+      return const {'ok': false, 'error': 'alarm_action_unavailable'};
+    }
+    if (_dashboardAction) {
+      return const {'ok': false, 'error': 'alarm_action_in_progress'};
+    }
+    _dashboardAction = true;
+    try {
+      final ok = action == 'stop'
+          ? await stop(source: 'dashboard')
+          : await snooze(source: 'dashboard');
+      return ok
+          ? snapshot()
+          : const {'ok': false, 'error': 'alarm_context_changed'};
+    } finally {
+      _dashboardAction = false;
+    }
   }
 
   void _publish() {
     final now = _clock();
     final next = _next(now);
     final s = _s;
+    _syncDashboardPresentation();
     final updated = AlarmStatus(
       phase: s.phase,
       ids: s.ids,

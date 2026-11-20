@@ -567,6 +567,8 @@ class AppContainer {
     await EchoImageSettings(settings, bus, log).init();
     await device.init();
     jsApi = JsApiManager(bus, commands, log, device.appVersion)
+      ..dashboardAlarmUi = alarms.dashboardAlarmUi
+      ..releaseDashboardAlarmUi = alarms.releaseDashboardPresentation
       ..haSockets = PageHaSockets(
         baseUrl: () => homeAssistant.baseUrl,
         token: () => settings.get(haToken),

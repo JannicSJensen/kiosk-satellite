@@ -64,6 +64,39 @@ When the alarm rings, Now Playing switches to the alarm's speaker, so the floati
 
 The alarm rings its tone instead when the music cannot play: the source or the speaker is out of reach, or the speaker does not start playing within a few seconds. Speak when it rings only works with the tone.
 
+## Dashboard ringing UI
+
+Compatible dashboards can present native ringing controls without taking over
+scheduling, audio or snooze timing. Set **Settings > Alarms > Dashboard alarm UI
+URL** to the exact HTTP(S) URL loaded by this device, without a query or
+fragment. For the secure-context proxy this is the device-local proxy URL,
+not the original server URL. Empty keeps the existing native presentation.
+This setting also chooses the native alarm screen, rather than a Clock or
+Weather Mood screensaver, as the emergency fallback. Sunrise remains native.
+
+The trusted main document uses `kioskSatellite.alarmUi(action, context)`.
+`status` returns `{ok, version: 1, device, context, snoozeMinutes, alarms}`.
+The opaque `device` identity is also advertised as `presentation.device` in
+`alarmsStatus`, so a dashboard can verify that its configured backend is this
+device. It changes after an app restart. `alarms` includes only ID, label,
+Music/Buzzer type, station and speaker names.
+
+Only after rendering usable ringing controls should the page call `present`
+with the exact `context` from `status`, then renew at least once per second.
+KS hides only its ringing view, not its alarm engine. A four-second lapse,
+navigation, disabling the setting or a changed alarm context restores native
+controls. `release` gives presentation back immediately. A browser on another
+computer, an iframe or the Remote API cannot renew this device-local lease.
+Do not renew while hidden, disconnected, read-only or unable to render controls.
+
+`stop` and `snooze` also require the exact current context. It includes the
+complete simultaneous alarm group, phase, ring time, snooze deadline and
+generation; stale or partial groups fail with `alarm_context_changed`. These
+actions operate on that whole group, just like the native buttons. A dashboard
+managing only some alarms must leave unrelated or mixed groups to KS. Native
+screen controls, voice commands, auto-silence and native scheduling still work.
+Responses use `{ok: false, error}` for refused requests.
+
 ## Sunrise
 
 A sunrise alarm starts before its time, as long as **Sunrise length** says. On the alarm's own view a glow rises from deep red to warm white while the screen brightens from its lowest level to full, then the alarm rings on the last color. A touch during the sunrise shows a **Stop** button for a few seconds, and Stop skips the ring too.
